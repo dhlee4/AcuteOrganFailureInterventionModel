@@ -2,7 +2,7 @@
 
 To execute,
 
-1. Install Apache Spark
+1. Install Apache Spark from https://spark.apache.org/downloads.html
 2. Download MIMIC-3 demo dataset from https://physionet.org/content/mimiciii-demo/1.4/
 3. Extract csv files under ./mimic-iii-clinical-database-demo-1.4
 4. Run parquetizer.py with the following command:
