@@ -7,8 +7,8 @@ To execute,
 3. Extract csv files under ./mimic-iii-clinical-database-demo-1.4
 4. Run parquetizer.py with the following command:
 
-'spark-submit parquetizer.py'
+`spark-submit parquetizer.py`
 
 5. Run model trainer mimic_hp_training_scale.py with the following command:
 
-'spark-submit mimic_hp_training_scale.py'
+`spark-submit mimic_hp_training_scale.py`
