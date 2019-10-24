@@ -1,4 +1,4 @@
-# AcuteOrganFailureInterventionModel
+# Acute Organ Failure Intervention Model
 
 To execute,
 
