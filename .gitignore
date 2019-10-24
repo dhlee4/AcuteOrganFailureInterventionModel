@@ -1,0 +1,5 @@
+# Created by .ignore support plugin (hsz.mobi)
+*
+!*.py
+!CMS32_DESC_LONG_DX.txt
+!.gitignore
