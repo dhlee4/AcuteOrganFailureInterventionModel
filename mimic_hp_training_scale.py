@@ -29,13 +29,16 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
     Evaluator will be separated!
     '''
 
-    def __init__(self,target_env=None,is_debug=True,cur_signature=""):
+    def __init__(self,target_env=None,is_debug=True,cur_signature="",eval_metric="AUPRC",hyperparam_selection="CV"):
         # class(processed previous stuffs?)
         mimic_preprocessor.__init__(self,target_env, is_debug,cur_signature)
         self.logger.info("preprocessor_init done")
-        data_run_experiment.__init__(self)
+        ## ideal call = mimic_run_experiment(is_debug=False, cur_signature="MIMIC3_DEMO"
+        #                                   , hyperparam_selection="CV", target_ICD9=["394.1","493.3"], availability_th=0.5
+        #                                   , spark_env=spark.conf_env, eval_metric="AUPRC, AUROC")
+        data_run_experiment.__init__(self,eval_metric=eval_metric,hyperparam_selection=hyperparam_selection)
         self.logger.info("run_experiment done")
-
+        self.hyperparam_selection=hyperparam_selection
         self.cur_preprocessed = self.run_preprocessor()
         self.logger.info("PREPROCESSOR_OUT")
         self.cur_action_df = self.action_df
@@ -52,11 +55,25 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
 
         self.testing_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TEST_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
         self.training_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TR_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
-        self.model_dir_template = self.home_dir + "/{4}_{0}_GB_0.7_{1}_{2}_{3}".format("{0}", self.postfix, self.add_flag, "{1}",self.cur_signature )
+        self.model_dir_template = self.home_dir + "/{4}_{0}_GB_{5}_0.7_{1}_{2}_{3}".format("{0}", self.postfix, self.add_flag, "{1}",self.cur_signature,self.hyperparam_selection)
         self.annot_intv_dir = self.intermediate_dir+"/intervention_{0}_{1}"
 
 
-
+    def get_param_grid(self,cur_model_selection):
+        from pyspark.ml.tuning import ParamGridBuilder
+        if self.is_debug:
+            return ParamGridBuilder() \
+                .addGrid(cur_model_selection.maxDepth, [2]) \
+                .addGrid(cur_model_selection.subsamplingRate, [0.3]) \
+                .addGrid(cur_model_selection.maxIter, [2]) \
+                .build()
+        else:
+            #20,0.5,10
+            return ParamGridBuilder() \
+                .addGrid(cur_model_selection.maxDepth, [2]) \
+                .addGrid(cur_model_selection.subsamplingRate, [0.3,0.8]) \
+                .addGrid(cur_model_selection.maxIter, [2]) \
+                .build()
 
 
     def add_demo(self):#(tr,te# ):
@@ -131,10 +148,29 @@ if __name__ == "__main__":
     else:
         cur_target_env = None
 
-    cur_experiment = mimic_run_experiment(target_env=cur_target_env,is_debug=False, cur_signature="MIMIC3_DEMO")
+    cur_experiment = mimic_run_experiment(target_env=cur_target_env,is_debug=False, cur_signature="MIMIC3_DEMO"
+                                          ,eval_metric="AUPRC",hyperparam_selection="TVT")
+    # ideal call = mimic_run_experiment(is_debug=False, cur_signature="MIMIC3_DEMO"
+    #                                   , hyperparam_selection="CV", target_ICD9=["394.1","493.3"], availability_th=0.5
+    #                                   , spark_env=spark.conf_env, eval_metric="AUPRC, AUROC")
     cur_experiment.logger.debug("IN")
     for cur_intv_num in [5,10]:
         cur_experiment.logger.debug("run_exp:{0}".format(cur_intv_num))
         cur_experiment.run_experiment(num_intv = cur_intv_num)
     cur_experiment.logger.debug("exp_done:{0}".format(cur_intv_num))
 
+
+
+    '''
+    #TODOS
+    Remove weird comments
+    Allow CV and model selection
+    provide agreement with lab tests
+    Provide feature contribution
+    Provide additional parameters for
+     1. Lab vs. predictions?
+     2. fp pts dxed with disease?
+     3. Feature contribution from the model
+     4. implement using ipynb
+     5. Provide list of interventions selected
+    '''

@@ -41,7 +41,10 @@ class spark_and_logger(object):
             if not is_python3:
                 if not self.__shared_state.has_key("spark"):
                     from pyspark.sql import SparkSession
-                    self.__shared_state["spark"]= SparkSession.builder.getOrCreate()
+                    # TODO allow users to specify the configuration
+                    from pyspark import SparkConf
+                    self.__shared_state["spark"]= SparkSession.builder.config([("spark.driver.memory","12g"), ("spark.executor.memory", "4g")])\
+                        .getOrCreate()
                     if self.home_dir:
                         self.__shared_state["spark"].sparkContext.setCheckpointDir(self.home_dir + "tmp_chkpoint")
                     else:

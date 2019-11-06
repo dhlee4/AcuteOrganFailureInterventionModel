@@ -9,7 +9,7 @@ import abc
 
 class data_run_experiment():
     __metaclass__ = abc.ABCMeta
-    def __init__(self):
+    def __init__(self,eval_metric,hyperparam_selection):
         # TODO Figure out the way to push *.show() in logging.info
         from spark_and_logger import spark_and_logger
         cur_spark_and_logger = spark_and_logger()
@@ -21,6 +21,8 @@ class data_run_experiment():
         self.add_flag="INTV_TOP_AUPRC_{0}".format(self.sel_top)
         self.target_of = ["TARGET_DISCH"]
         self.non_feature_column = ["ID", "TIME_SPAN"]
+        self.eval_performance_criteria=eval_metric
+        self.eval_cv_or_tvt = hyperparam_selection
         from annotator_gen import annotator_gen
         self.cur_annotator = annotator_gen()
         return
@@ -73,11 +75,24 @@ class data_run_experiment():
         self.sel_top = cur_top_k
         self.postfix = "p_val_top_{0}".format(self.sel_top)
         self.add_flag = "INTV_TOP_AUPRC_{0}".format(self.sel_top)
+
+        self.testing_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TEST_RESULT_{1}_{2}".format("{0}",
+                                                                                                      self.postfix,
+                                                                                                      self.add_flag,
+                                                                                                      self.cur_signature)
+        self.training_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TR_RESULT_{1}_{2}".format("{0}",
+                                                                                                     self.postfix,
+                                                                                                     self.add_flag,
+                                                                                                     self.cur_signature)
+        self.model_dir_template = self.home_dir + "/{4}_{0}_GB_{5}_0.7_{1}_{2}_{3}".format("{0}", self.postfix,
+                                                                                           self.add_flag, "{1}",
+                                                                                           self.cur_signature,
+                                                                                           self.hyperparam_selection)
+        self.annot_intv_dir = self.intermediate_dir + "/intervention_{0}_{1}"
+
         self.training_temp_dir = self.intermediate_dir + "/TRAINING_{0}_{1}".format(self.postfix, self.add_flag)
         self.testing_temp_dir = self.intermediate_dir + "/TESTING_{0}_{1}".format(self.postfix, self.add_flag)
-        self.testing_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TEST_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
-        self.training_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TR_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
-        self.model_dir_template = self.home_dir + "/{4}_{0}_GB_0.7_{1}_{2}_{3}".format("{0}", self.postfix, self.add_flag, "{1}",self.cur_signature )
+
         return
 
     @abc.abstractmethod
@@ -335,7 +350,7 @@ class data_run_experiment():
             #terminal_outcome
     #annotate_dataset()
 
-    def run_RF(self,tr_inst,te_inst,target_metric='areaUnderPR',model_of = []):
+    def run_RF(self,tr_inst,te_inst,model_of = []):
         from pyspark.sql.functions import col
         if type(self) == data_run_experiment:
             raise NotImplementedError("Method need to be called in sub-class but currently called in base class")
@@ -357,111 +372,205 @@ class data_run_experiment():
         from pyspark.ml.evaluation import BinaryClassificationEvaluator
         from pyspark.ml.tuning import CrossValidator, ParamGridBuilder
 
-        evaluator=BinaryClassificationEvaluator(metricName=target_metric)
-
-        pipeline = Pipeline(stages=[cur_classifier])
-
-        paramGrid = self.get_param_grid(cur_classifier)
-
-        # Moving CV to Tr Val 7:2:1
-
-
-
-        '''crossval = CrossValidator(estimator=pipeline\
-                              ,estimatorParamMaps=paramGrid\
-                              ,evaluator=evaluator\
-                              ,numFolds=self.cur_cv_fold)'''
-        orig_tr_inst = tr_inst
-        orig_te_inst = te_inst
-        self.logger.info( "ORIGINAL_INSTANCES")
-        #of pop_overview
-        from pyspark.sql.functions import count,datediff
-        from pyspark.sql.functions import udf,log,sum,exp,max
-        udf_prob = udf(lambda x: x.toArray().tolist()[1])
-        from pyspark.sql.functions import corr, udf,isnan
-        for cur_of in model_of:
-            self.logger.debug( cur_of)
-            if "{0}_excl".format(cur_of) not in orig_tr_inst.columns:
-                self.logger.info( "NO TARGET {0} is in pts".format(cur_of))
-                continue
-            tr_inst = orig_tr_inst.where(col("{0}_excl".format(cur_of)) == 0).withColumn("label",col("{0}_label".format(cur_of)).cast("double")).repartition(500).checkpoint()
-            self.logger.info( "Excluded instances for training:{0}".format(orig_tr_inst.where(col("{0}_excl".format(cur_of)) == 1).count()))
-
-            self.logger.info( "TR_POP")
-            tr_inst.groupBy("label").agg(count("*")).show()
-
-
-            te_inst = orig_te_inst.withColumn("label",col("{0}_label".format(cur_of)).cast("double"))
-
-            self.logger.info( "TE_POP")
-            te_inst.groupBy("label").agg(count("*")).show()
-
-            tr_inst.printSchema()
-            tr_val_pts_dict = self.get_target_tr_val_id()
-
-            tr_pts = tr_val_pts_dict["TR"]
-            val_pts = tr_val_pts_dict["VAL"]
-            self.logger.info(tr_pts)
-            self.logger.info(val_pts)
-
-            orig_tr_inst = tr_inst
-            tr_inst = orig_tr_inst.where(col("ID").isin(tr_pts)).persist()
-            val_inst = orig_tr_inst.where(col("ID").isin(val_pts)).persist()
-
-
-            self.logger.info("tr_inst_count:{0}//val_inst_count{1}".format(tr_inst.count(),val_inst.count()))
-            te_inst.printSchema()
-
-            # NEED to change with other name, for example pipeline model.
-            pipeline_models = pipeline.fit(tr_inst,params=paramGrid)
-
-            max_pr = -1.0
-            bestModel = None
-            for cur_model in pipeline_models:
-                val_pred = cur_model.transform(val_inst)
-                agg_prob_val = val_pred.groupBy("ID").agg(max("label").alias("label"),sum(log(1.0-udf_prob("Probability"))).alias("inverse_log_sum"))\
-                    .select("label",(1.0-exp(col("inverse_log_sum"))).alias("rawPrediction"))
-                agg_prob_val.show(300,truncate=False)
-                cur_pr = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", labelCol="label",metricName=target_metric).evaluate(agg_prob_val)
-                self.logger.info(cur_pr)
-                if max_pr < cur_pr:
-                    max_pr = cur_pr
-                    bestModel = cur_model
-
-            if not bestModel:
-                self.logger.info("NO MODEL")
-                return
-            self.logger.debug( bestModel)
-            self.logger.debug(max_pr)
-            udf_prob = udf(lambda x: float(x.toArray().tolist()[1]))
-            prediction = bestModel.transform(te_inst)
-            prediction.show()
-            prediction.write.save(self.testing_result_dest_template.format(cur_of), mode="overwrite")
-            tr_result = bestModel.transform(tr_inst).withColumn("Prob",udf_prob("Probability"))
-            tr_result.write.save(self.training_result_dest_template.format(cur_of), mode="overwrite")
-            #tr_inst.show_corr_result(tr_result)
-            from pyspark.mllib.evaluation import BinaryClassificationMetrics
-            self.logger.info("MAX_PRC_VAL:{0}".format(max_pr))
-            # Just Save the Crossvalidation model so that I can access the avgMetric later.
-            bestModel.save(self.model_dir_template.format(cur_of,max_pr))
-            tr_inst.unpersist()
-            val_inst.unpersist()
-
-    def get_param_grid(self,cur_model_selection):
-        from pyspark.ml.tuning import ParamGridBuilder
-        if self.is_debug:
-            return ParamGridBuilder() \
-                .addGrid(cur_model_selection.maxDepth, [2]) \
-                .addGrid(cur_model_selection.subsamplingRate, [0.3]) \
-                .addGrid(cur_model_selection.maxIter, [2]) \
-                .build()
+        if self.eval_performance_criteria == "AUPRC":
+            target_metric="areaUnderPR"
+        elif self.eval_performance_criteria == "AUROC":
+            target_metric="areaUnderROC"
         else:
-            #20,0.5,10
-            return ParamGridBuilder() \
-                .addGrid(cur_model_selection.maxDepth, [5]) \
-                .addGrid(cur_model_selection.subsamplingRate, [0.3]) \
-                .addGrid(cur_model_selection.maxIter, [5]) \
-                .build()
+            raise Exception("eval_metric should be either 'AUPRC' or 'AUROC'")
+
+
+        evaluator = BinaryClassificationEvaluator(metricName=target_metric)
+        paramGrid = self.get_param_grid(cur_model_selection)
+
+        if self.eval_cv_or_tvt == "CV":
+            pipeline = Pipeline(stages=[cur_classifier])
+            orig_tr_inst = tr_inst
+            orig_te_inst = te_inst
+            self.logger.info("ORIGINAL_INSTANCES")
+            # of pop_overview
+            from pyspark.sql.functions import count, datediff
+            from pyspark.sql.functions import udf, log, sum, exp, max
+            udf_prob = udf(lambda x: x.toArray().tolist()[1])
+            from pyspark.sql.functions import corr, udf, isnan
+            for cur_of in model_of:
+                self.logger.debug(cur_of)
+                #should move this to back
+                te_inst = orig_te_inst.withColumn("label", col("{0}_label".format(cur_of)).cast("double"))
+
+                self.logger.info("TE_POP")
+                te_inst.groupBy("label").agg(count("*")).show()
+
+                tr_inst.printSchema()
+                tr_val_pts_dict = self.get_target_tr_val_id()
+                orig_tr_inst = tr_inst
+
+                tr_pts = tr_val_pts_dict["TR"]
+                val_pts = tr_val_pts_dict["VAL"]
+                self.logger.info(tr_pts)
+                self.logger.info(val_pts)
+
+                all_training_ids = tr_pts+val_pts
+                from random import shuffle
+                shuffle(all_training_ids)
+                import numpy as np
+                print(len(all_training_ids))
+                cv_id_list_full = np.array(all_training_ids)
+                perform_dict = dict()
+                for cur_cv_stage in range(self.cur_cv_fold):
+                    tr_pts = cv_id_list_full[np.linspace(0,cv_id_list_full.shape[0]-1,cv_id_list_full.shape[0])%self.cur_cv_fold != cur_cv_stage].tolist()
+                    val_pts = cv_id_list_full[np.linspace(0,cv_id_list_full.shape[0]-1,cv_id_list_full.shape[0])%self.cur_cv_fold == cur_cv_stage].tolist()
+                    print(np.linspace(0,cv_id_list_full.shape[0]-1,cv_id_list_full.shape[0])%self.cur_cv_fold == cur_cv_stage)
+                    print(cv_id_list_full[np.linspace(0,cv_id_list_full.shape[0]-1,cv_id_list_full.shape[0])%self.cur_cv_fold == cur_cv_stage])
+                    print("VAL_ROUND_{0}_TARGET IDS:{1}".format(cur_cv_stage,val_pts))
+
+                    tr_inst = orig_tr_inst.where(col("ID").isin(tr_pts))#.persist()
+                    val_inst = orig_tr_inst.where(col("ID").isin(val_pts))#.persist()
+
+
+                    self.logger.info("Excluded instances for training:{0}".format(
+                        tr_inst.where(col("{0}_excl".format(cur_of)) == 1).count()))
+
+                    tr_inst = tr_inst.where(col("{0}_excl".format(cur_of)) == 0).withColumn("label", col(
+                        "{0}_label".format(cur_of)).cast("double"))
+                    val_inst = val_inst.withColumn("label", col(
+                        "{0}_label".format(cur_of)).cast("double"))
+
+                    self.logger.info("TR_POP")
+                    tr_inst.groupBy("label").agg(count("*")).show()
+
+                    # NEED to change with other name, for example pipeline model.
+                    pipeline_models = pipeline.fit(tr_inst, params=paramGrid)
+
+                    for cur_model in pipeline_models:
+                        val_pred = cur_model.transform(val_inst)
+                        agg_prob_val = val_pred.groupBy("ID").agg(max("label").alias("label"),
+                                                                  sum(log(1.0 - udf_prob("Probability"))).alias(
+                                                                      "inverse_log_sum")) \
+                            .select("label", (1.0 - exp(col("inverse_log_sum"))).alias("rawPrediction"))
+                        agg_prob_val.show(300, truncate=False)
+                        cur_pr = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", labelCol="label",
+                                                               metricName=target_metric).evaluate(agg_prob_val)
+                        if str(cur_model.stages[-1].extractParamMap()) not in perform_dict:
+                            perform_dict[str(cur_model.stages[-1].extractParamMap())] = dict()
+                            perform_dict[str(cur_model.stages[-1].extractParamMap())]["PERF"]=list()
+                            perform_dict[str(cur_model.stages[-1].extractParamMap())]["PARAM"] = cur_model.stages[-1].extractParamMap()
+
+                        perform_dict[str(cur_model.stages[-1].extractParamMap())]["PERF"].append(cur_pr)
+
+                best_pf_measure = -1
+                best_pf_param = None
+
+                for key in perform_dict:
+                    import numpy as np
+                    test_array = np.array(perform_dict[key]["PERF"])
+                    print(key, test_array.mean(), test_array.std())
+                    if best_pf_measure < test_array.mean():
+                        best_pf_measure = test_array.mean()
+                        best_pf_param = perform_dict[key]["PARAM"]
+
+
+                print("retrain model based on best hp from CV")
+                print("PERF:{0}".format(best_pf_measure))
+                print("HP:{0}".format(best_pf_param))
+                tr_inst = orig_tr_inst.where(col("{0}_excl".format(cur_of)) == 0).withColumn("label", col(
+                    "{0}_label".format(cur_of)).cast("double"))
+
+                bestModel = pipeline.fit(tr_inst.where(col("ID").isin(cv_id_list_full.tolist())),params=[best_pf_param])[0]
+
+                bestModel.save(self.model_dir_template.format(cur_of, best_pf_measure))
+
+                prediction = bestModel.transform(te_inst)
+                prediction.show()
+                prediction.write.save(self.testing_result_dest_template.format(cur_of), mode="overwrite")
+                tr_result = bestModel.transform(tr_inst).withColumn("Prob",udf_prob("Probability"))
+                tr_result.write.save(self.training_result_dest_template.format(cur_of), mode="overwrite")
+
+
+        elif self.eval_cv_or_tvt == "TVT":
+            pipeline = Pipeline(stages=[cur_classifier])
+            orig_tr_inst = tr_inst
+            orig_te_inst = te_inst
+            self.logger.info( "ORIGINAL_INSTANCES")
+            #of pop_overview
+            from pyspark.sql.functions import count,datediff
+            from pyspark.sql.functions import udf,log,sum,exp,max
+            udf_prob = udf(lambda x: x.toArray().tolist()[1])
+            from pyspark.sql.functions import corr, udf,isnan
+            for cur_of in model_of:
+                self.logger.debug( cur_of)
+                if "{0}_excl".format(cur_of) not in orig_tr_inst.columns:
+                    self.logger.info( "NO TARGET {0} is in pts".format(cur_of))
+                    continue
+                tr_inst = orig_tr_inst.where(col("{0}_excl".format(cur_of)) == 0).withColumn("label",col("{0}_label".format(cur_of)).cast("double")).repartition(500).checkpoint()
+                self.logger.info( "Excluded instances for training:{0}".format(orig_tr_inst.where(col("{0}_excl".format(cur_of)) == 1).count()))
+
+                self.logger.info( "TR_POP")
+                tr_inst.groupBy("label").agg(count("*")).show()
+
+
+                te_inst = orig_te_inst.withColumn("label",col("{0}_label".format(cur_of)).cast("double"))
+
+                self.logger.info( "TE_POP")
+                te_inst.groupBy("label").agg(count("*")).show()
+
+                tr_inst.printSchema()
+                tr_val_pts_dict = self.get_target_tr_val_id()
+
+                tr_pts = tr_val_pts_dict["TR"]
+                val_pts = tr_val_pts_dict["VAL"]
+                self.logger.info(tr_pts)
+                self.logger.info(val_pts)
+
+                orig_tr_inst = tr_inst
+                tr_inst = orig_tr_inst.where(col("ID").isin(tr_pts))#.persist()
+                val_inst = orig_tr_inst.where(col("ID").isin(val_pts))#.persist()
+
+                tr_inst.show()
+                val_inst.show()
+
+
+                self.logger.info("tr_inst_count:{0}//val_inst_count{1}".format(tr_inst.count(),val_inst.count()))
+                te_inst.printSchema()
+
+                # NEED to change with other name, for example pipeline model.
+                pipeline_models = pipeline.fit(tr_inst,params=paramGrid)
+
+                max_pr = -1.0
+                bestModel = None
+                for cur_model in pipeline_models:
+                    val_pred = cur_model.transform(val_inst)
+                    agg_prob_val = val_pred.groupBy("ID").agg(max("label").alias("label"),sum(log(1.0-udf_prob("Probability"))).alias("inverse_log_sum"))\
+                        .select("label",(1.0-exp(col("inverse_log_sum"))).alias("rawPrediction"))
+                    agg_prob_val.show(300,truncate=False)
+                    cur_pr = BinaryClassificationEvaluator(rawPredictionCol="rawPrediction", labelCol="label",metricName=target_metric).evaluate(agg_prob_val)
+                    self.logger.info(cur_pr)
+                    if max_pr < cur_pr:
+                        max_pr = cur_pr
+                        bestModel = cur_model
+
+                if not bestModel:
+                    self.logger.info("NO MODEL")
+                    return
+                self.logger.debug( bestModel)
+                self.logger.debug(max_pr)
+                udf_prob = udf(lambda x: float(x.toArray().tolist()[1]))
+                prediction = bestModel.transform(te_inst)
+                prediction.show()
+                prediction.write.save(self.testing_result_dest_template.format(cur_of), mode="overwrite")
+                tr_result = bestModel.transform(tr_inst).withColumn("Prob",udf_prob("Probability"))
+                tr_result.write.save(self.training_result_dest_template.format(cur_of), mode="overwrite")
+                #tr_inst.show_corr_result(tr_result)
+                from pyspark.mllib.evaluation import BinaryClassificationMetrics
+                self.logger.info("MAX_PRC_VAL:{0}".format(max_pr))
+                # Just Save the Crossvalidation model so that I can access the avgMetric later.
+                bestModel.save(self.model_dir_template.format(cur_of,max_pr))
+                tr_inst.unpersist()
+                val_inst.unpersist()
+
+    @abc.abstractmethod
+    def get_param_grid(self,cur_model_selection):
+        pass
 
     def raw_predicted_risks(self,target_file,cur_lab,cur_lab_def):
         import pyspark
@@ -534,6 +643,8 @@ class data_run_experiment():
                 self.define_and_normalize_terminal_df()
                 preprocessed_data = self.handle_missing()
                 tr_inst, te_inst = self.annotate_dataset(preprocessed_data)
+                tr_inst.show()
+                te_inst.show()
                 self.logger.info("annotated")
                 self.run_RF(tr_inst, te_inst,model_of = cur_of)
                 self.logger.info("run_RF")
