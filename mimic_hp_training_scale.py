@@ -39,7 +39,6 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
     def __init__(self,target_env=None,is_debug=True,cur_signature="",eval_metric="AUPRC",hyperparam_selection="CV"
                  ,target_disease=None):
         # class(processed previous stuffs?)
-        print(target_disease)
         if target_disease is None:
             raise Exception("Target disease not specified")
         mimic_preprocessor.__init__(self,target_env, is_debug,cur_signature)
@@ -98,10 +97,10 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
             return self.spark.read.parquet(self.cur_demo_file_name).withColumnRenamed("HADM_ID", "ID")
         except pyspark.sql.utils.AnalysisException as ex:
 
-            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+            '''template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(ex).__name__, ex.args)
             self.logger.info(message)
-            self.logger.info("PROCESS")
+            self.logger.info("PROCESS")'''
 
             from pyspark.sql.functions import datediff,col
             from pyspark.ml.feature import OneHotEncoder, StringIndexer
@@ -120,9 +119,7 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
             demo_col_list = ["AGE"]
             for cat_col in target_col:
                 SI_model= StringIndexer(inputCol=cat_col, outputCol="SI_{0}".format(cat_col)).fit(merged_demo)
-                demo_col_list = demo_col_list+[demo_var+"_"+demo_info for demo_var, demo_info in (zip([cat_col]*len(SI_model.labels),SI_model.labels))]
-                #debug. erase when done
-                print(demo_col_list)
+                demo_col_list = demo_col_list+[demo_var+"||"+demo_info for demo_var, demo_info in (zip([cat_col]*len(SI_model.labels),SI_model.labels))]
                 merged_demo = SI_model.transform(merged_demo)
                 merged_demo = OneHotEncoder(inputCol="SI_{0}".format(cat_col),outputCol="OH_{0}".format(cat_col), dropLast=False).transform(merged_demo)
                 vector_target.append("OH_{0}".format(cat_col))
@@ -174,9 +171,6 @@ if __name__ == "__main__":
     #Target Disease: 42731, 5849, 51881,5990
     cur_experiment = mimic_run_experiment(target_env=cur_target_env,is_debug=False, cur_signature="MIMIC3_DEMO"
                                           ,eval_metric="AUPRC",hyperparam_selection="TVT",target_disease=["51881"])
-    # ideal call = mimic_run_experiment(is_debug=False, cur_signature="MIMIC3_DEMO"
-    #                                   , hyperparam_selection="CV", target_ICD9=["394.1","493.3"], availability_th=0.5
-    #                                   , spark_env=spark.conf_env, eval_metric="AUPRC, AUROC")
     cur_experiment.logger.debug("IN")
     for cur_intv_num in [10]:
         cur_experiment.logger.debug("run_exp:{0}".format(cur_intv_num))

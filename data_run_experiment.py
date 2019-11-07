@@ -73,7 +73,6 @@ class data_run_experiment():
             return ret_data_frame
 
     def set_top_intv_k(self,cur_top_k = 5):
-        print(self.home_dir)
         self.sel_top = cur_top_k
         self.postfix = "p_val_top_{0}".format(cur_top_k)
         self.add_flag = "INTV_TOP_AUPRC_{0}".format(cur_top_k)

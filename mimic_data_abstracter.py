@@ -6,9 +6,7 @@ from data_abstracter import data_abstracter
 #a
 class mimic_data_abstracter(data_abstracter):
     def __init__(self,target_env=None, is_debug=True,cur_signature = ""):
-        print("INIT IN")
         data_abstracter.__init__(self, target_env, is_debug,cur_signature)
-        print("INIT OUT")
 
     def get_def_df(self):
         import pyspark

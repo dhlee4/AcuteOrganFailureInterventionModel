@@ -105,7 +105,6 @@ class mimic_post_hoc_analysis(mimic_run_experiment):
         from pyspark.ml.evaluation import BinaryClassificationEvaluator
 
         udf_prob = udf(lambda x: x.toArray().tolist()[1])
-        #of_list = {"AHF":["42821","42823","42831","42833","42841","42843"],"ALI":["51881","51884","51851","51853"],"AKI":["5845","5849","5848"],"ALF":["570"]}
         cur_terminal_df = self.get_terminal_df()
         self.flatten_terminal_outcome()
         for cur_of in [self.target_disch_col]:
@@ -132,15 +131,54 @@ class mimic_post_hoc_analysis(mimic_run_experiment):
             #cur_te_agg.show()
 
             from pyspark.sql.functions import count
-            cur_te_agg.select(cur_of).groupBy(cur_of).agg(count("*")).show()
+            #cur_te_agg.select(cur_of).groupBy(cur_of).agg(count("*")).show()
 
-            print("TR_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(cur_tr_agg)))
+            '''print("TR_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(cur_tr_agg)))
             print("TE_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(cur_te_agg)))
             print("TR_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(cur_tr_agg)))
-            print("TE_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(cur_te_agg)))
+            print("TE_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(cur_te_agg)))'''
 
             return cur_tr_agg, cur_te_agg
 
+    def eval_feature_contribution(self, target_model, top_k=10):
+        from pyspark.sql.functions import col
+        def_df = self.get_def_df()
+        cur_feature_list = self.get_all_feature_name()
+        cur_importance = target_model.featureImportances.toArray().tolist()
+        zipped_list = zip(cur_feature_list, cur_importance)
+        processed_df = [{"raw_feature": cur_item[0], "IG": cur_item[1]} for cur_item in zipped_list]
+        cur_feature_importance_df = self.spark.createDataFrame(processed_df)
+        cur_feature_importance_num = cur_feature_importance_df.where(col("raw_feature").like("imp_N_%"))
+        cur_feature_importance_cat = cur_feature_importance_df.where(col("raw_feature").like("C_%"))
+        cur_feature_importance_demo = cur_feature_importance_df.where(
+            ~((col("raw_feature").like("C_%")) | (col("raw_feature").like("imp_N_%"))))
+        voca_dict = self.spark.read.parquet(self.voca_name).join(def_df, "ITEMID")
+        from pyspark.sql.functions import concat, lit, split
+        voca_dict = voca_dict.withColumn("raw_feature", concat(lit("C_"), col("idx")))
+
+        cur_feature_importance_num = cur_feature_importance_num.withColumn("ITEMID",
+                                                                           split("raw_feature", "_").getItem(2))
+
+        from pyspark.sql.functions import udf
+        udf_demo_value = udf(lambda x: x.split("||")[1] if len(x.split("||")) > 1 else "N/A")
+        udf_demo_feature = udf(lambda x: x.split("||")[0])
+
+        cur_feature_importance_num = cur_feature_importance_num.join(def_df, "ITEMID") \
+            .withColumn("feature_type", lit("numeric")).withColumn("method_or_value",
+                                                                   split("raw_feature", "_").getItem(3))
+        cur_feature_importance_cat = cur_feature_importance_cat.join(voca_dict, "raw_feature") \
+            .withColumn("feature_type", lit("categorical")).withColumn("method_or_value", col("VALUE"))
+        cur_feature_importance_demo = cur_feature_importance_demo \
+            .withColumn("feature_type", lit("demographics")) \
+            .withColumn("LABEL", udf_demo_feature("raw_feature")) \
+            .withColumn("method_or_value", udf_demo_value("raw_feature"))
+
+        all_features = cur_feature_importance_num.select("IG", "ITEMID", "LABEL", "feature_type", "method_or_value") \
+            .union(cur_feature_importance_cat.select("IG", "ITEMID", "LABEL", "feature_type", "method_or_value")) \
+            .union(cur_feature_importance_demo.select("IG", lit("N/A").alias("ITEMID"), "LABEL", "feature_type",
+                                                      "method_or_value"))
+
+        return all_features.orderBy(col("IG").desc()).limit(top_k).toPandas()
 
 
 if __name__ == "__main__":
