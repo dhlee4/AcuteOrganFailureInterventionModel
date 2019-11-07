@@ -1,9 +1,6 @@
 import abc
 
 
-#download from https://physionet.org/content/mimiciii-demo/1.4/
-#run parquetizer
-
 class data_source_mask(object):
     def __init__(self,target_env = None, cur_signature = "0603",is_debug = False,dataset_dir="./mimic3_demo_dataset/"):
         '''
@@ -41,7 +38,6 @@ class data_source_mask(object):
         self.home_dir = self.home_dir + self.cur_signature + "/"
         cur_spark_and_logger = spark_and_logger()
         cur_spark_and_logger.home_dir = self.home_dir
-        # add time-stamp for the next iteration
         self.intermediate_dir = self.home_dir + "/temp/"
         self.cached_obs_df = "{0}/{1}".format(self.intermediate_dir,"obs_df_intermediate")
         self.cached_action_df = "{0}/{1}".format(self.intermediate_dir, "action_df_intermediate")
@@ -163,12 +159,6 @@ class data_abstracter(data_source_mask):
 
     @abc.abstractmethod
     def get_obs_df(self):
-        '''
-        return dataframe with ID, TIME_OBS, ITEMID, VALUE, SOURCE
-        AS IS! without filtering, tagging etc..
-        prep dictionary for ITEMID
-        :return:
-        '''
         pass
 
     @abc.abstractmethod
@@ -200,7 +190,6 @@ class data_abstracter(data_source_mask):
             return cur_target_id_list
         except IOError as e:
             self.logger.debug("RUN_PROCESS")
-        # Should have ids from obs_df
         cur_target_id_list =self.get_obs_df().select("ID").distinct().rdd.flatMap(list).collect()
         import os
         if not os.path.exists(self.intermediate_dir):

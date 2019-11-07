@@ -6,7 +6,6 @@ class data_preprocessor():
     __metaclass__ = abc.ABCMeta
     def __init__(self):
         from datetime import datetime
-        #now it is getting weird
         from preprocessor_gen import preprocessor_gen
         self.cur_preprocessor = preprocessor_gen()
         return
@@ -23,27 +22,6 @@ class data_preprocessor():
         if type(self) == data_preprocessor:
             raise NotImplementedError("Method need to be called in sub-class but currently called in base class")
 
-        '''
-
-        #DL0411: Params that needs to be exposed: availability th. spark context? repartition_const, cat_voca_list
-        #Useful to output: ref_list. feature columns, processed df
-        #spec for processed DFs: missing values will be presented as nulls. numeric values will be noted as N and categorical values will be noted as C.
-        #test_id = for test instances
-        #something like -- num_summary, cat_summary, feature_columns(in order), processed_df = run_preprocess(0.7,repartition_const,test_id,verbose=True)
-        #make sure parquet doesn't change their column orders - NO.https://stackoverflow.com/questions/32748478/is-there-a-possibility-to-keep-column-order-when-reading-parquet?utm_medium=organic&utm_source=google_rich_qa&utm_campaign=google_rich_qa
-        #separate the descriptor columns, and let feature columns to ascending orders. make sure this steps in the future work. expected orders will be 1) descriptor columns, 2) categorical variables, 3) numerical variables
-        #appending demographic variables is up to classifiers as it depends on the experiment during preprocessing step. Maybe include preprocessing step in here though? Maybe separate them and handle preprocess in here.
-        # SOMETHING LIKE run_preprocess_time_series(0.7,repartition_const, test_id, verbose=True)
-        #           AND  run_preprocess_demographics(repartition_const,verbose=True)
-        #normalization is also not part of the responsibility of this code. it assume the classifiers to do the normalization before the training(if needed)
-        #consider repartition original clinical datasets and resave them
-        #DL0411: end of comments
-        # There are some issues in categorical variables. Low availability features are introduced into the model. Need to figure out why and prepare testcode for validating this. Not only for categorical features, but also numerical features.
-        # should parameterize the whole running process. Generate outputs with time stamps. In case we need to rerun it, it should be easily trackable so that we don't need to run whole pipeline. -- DONE
-        # also, validate by load dataframe, extract columns and compare with voca
-
-        :return spark dataframe witih preprocessed. NAME: ID,TIME_SPAN// Others - features in OBS:
-        '''
         from pyspark.sql.functions import struct, col, split, date_add
         try:
             return self.spark.read.parquet(self.out_file_name)
@@ -103,7 +81,6 @@ class data_preprocessor():
         cur_obs.groupBy("ITEMID").agg(count("*").alias("cnt")).orderBy(col("cnt").desc()).show(300)
 
         num_cat_tagged = self.cur_preprocessor.num_cat_tagger(cur_obs)
-        # this should only be using TR data. When it is done, num/cat will be tagged next to the testing datase
         cat_raw_filtered, cat_voca_list = self.cur_preprocessor.cat_frequency_filter(num_cat_tagged.where("IS_CAT == 1"))
         cat_voca_list = self.save_voca(cat_voca_list)
         self.logger.info("NUMBERS")
@@ -149,9 +126,6 @@ class data_preprocessor():
 
             cat_featurized = self.cur_preprocessor.cat_featurizer(cat_filtered, voca_df=cat_voca_list\
                                                                   , REPARTITION_CONST=REPARTITION_CONST)
-            # stuffs that needs to be matched : unique_n(ITEMID) in cat_featurized, unique_n(ITEMID) in cat_featurized
-            # voca should cover all C_[X] instances in preprocessed_data
-            #
             self.logger.info("CAT_FEATURIZED")
 
             num_featurized = self.cur_preprocessor.num_featurizer(num_filtered, ref_df=num_ref_list\

@@ -74,8 +74,6 @@ class mimic_data_abstracter(data_abstracter):
 
     def get_obs_df(self):
         '''
-        return dataframe with ID, TIME_OBS, ITEMID, VALUE, SOURCE
-        AS IS! without filtering, tagging etc..
 
         prep dictionary for ITEMID
         :return:
@@ -180,7 +178,6 @@ class mimic_data_abstracter(data_abstracter):
 
     def get_action_itemids(self):
         '''
-        Maybe need to move this under model abstractor
         :return:
         '''
         # TODO Why disch Dx included in here?

@@ -78,10 +78,6 @@ class mimic_post_hoc_analysis(mimic_run_experiment):
                     datediff(te_result.TIME_SPAN.TIME_TO, cur_lab.TIME_OBS) == 0)).groupBy("ITEMID").agg(
             corr(col("Prob").cast("double"), col("VALUE").cast("double")).alias("Pearson_Correlation"), count("*").alias("Num_OBS")).persist()
 
-        '''corr_result.join(cur_lab_def, "ITEMID").where((~col("corr_val").isNull()) & (~isnan("corr_val"))).orderBy(
-            col("corr_val")).show(100, truncate=False)
-        corr_result.join(cur_lab_def, "ITEMID").where((~col("corr_val").isNull()) & (~isnan("corr_val"))).orderBy(
-            col("corr_val").desc()).show(100, truncate=False)'''
         return_df = corr_result.join(cur_lab_def, "ITEMID")\
             .where((~col("Pearson_Correlation").isNull()) & (~isnan("Pearson_Correlation")))\
             .orderBy(col("Pearson_Correlation") if ascending else col("Pearson_Correlation").desc()).limit(top_lists).toPandas()
@@ -90,11 +86,6 @@ class mimic_post_hoc_analysis(mimic_run_experiment):
 
         return return_df
 
-        '''self.logger.info("TE_AUC:{0}".format(
-            BinaryClassificationEvaluator(rawPredictionCol="Prob", labelCol="label").evaluate(te_result)))
-        self.logger.info("TE_PRC:{0}".format(
-            BinaryClassificationEvaluator(rawPredictionCol="Prob", labelCol="label", metricName="areaUnderPR").evaluate(
-                te_result)))'''
 
     def evaluate_agg_prob(self):
         import pyspark
@@ -133,10 +124,6 @@ class mimic_post_hoc_analysis(mimic_run_experiment):
             from pyspark.sql.functions import count
             #cur_te_agg.select(cur_of).groupBy(cur_of).agg(count("*")).show()
 
-            '''print("TR_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(cur_tr_agg)))
-            print("TE_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(cur_te_agg)))
-            print("TR_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(cur_tr_agg)))
-            print("TE_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(cur_te_agg)))'''
 
             return cur_tr_agg, cur_te_agg
 

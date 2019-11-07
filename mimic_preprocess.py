@@ -1,14 +1,3 @@
-'''
-Running OK so far.
-'''
-
-
-#responsibility: 1) Generalize the given dataset,2) filter bad quality data entry, 3) flatten them with NULL. 
-#Current bad quality filtering out criteria: continuous variable - IQR filter, categorical variable - less frequent categorical entry
-
-#spark.sparkContext.setCheckpointDir("/gscratch/stf/dhlee4/spark_checkpoint/")
-
-#V1 : DNR, DNI, CMO Excluded. Metavision only, categorical variable deciding factor: cardinality is less than 20, variables with majority numeric values and some string treated as numeric variables, and string values are treated separately as categorical variable during feature representation -- rewrite this.
 
 from data_preprocessor import data_preprocessor
 from mimic_data_abstracter import mimic_data_abstracter
@@ -25,8 +14,6 @@ class mimic_preprocessor(mimic_data_abstracter,data_preprocessor):
             self.th_range = [0.3]
         else:
             self.th_range = [0.5]
-            # TODO Something wrong in the logger. Need to figure this out
-            #self.logger.debug( self.th_range)
 
 
 

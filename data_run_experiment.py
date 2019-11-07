@@ -1,9 +1,6 @@
 from data_preprocessor import data_preprocessor
 from mimic_preprocess import mimic_preprocessor
 
-# TODO Make sure DX diagnosis not included in terminal outcome
-# TODO Make sure handle exceptions if it is not identified from the dataset(terminal DX)
-
 import abc
 
 
@@ -16,7 +13,7 @@ class data_run_experiment():
         self.spark = cur_spark_and_logger.spark
         self.logger = cur_spark_and_logger.logger
         self.itemid = "ITEMID"
-        self.sel_top=5 #as default
+        self.sel_top=5
         self.postfix = "p_val_top_{0}".format(self.sel_top)
         self.add_flag="INTV_TOP_AUPRC_{0}".format(self.sel_top)
         self.target_disch_col = "DISCH_{0}".format("_".join(target_disch))
@@ -30,8 +27,6 @@ class data_run_experiment():
         return
 
     def handle_missing(self,non_feature_col = ["ID","TIME_SPAN"]):
-        #Take an hour and half for the small test set. Might be some way to improve it?
-        # Anyway, it is one-time run so don't need to worry that much for now.
         import pyspark
         if type(self) == data_run_experiment:
             raise NotImplementedError("Method need to be called in sub-class but currently called in base class")
@@ -120,10 +115,6 @@ class data_run_experiment():
             raise Exception("annotation method not implemented")
 
     def annotate_pval_dataset(self,cur_df):
-        # Diagnosis is mixing up in mimic. Need to fix
-        #annotation should be part of this process?or invoke?
-        #dedicate to other process, and run new process if it is not exists, or return existing dataframe if it is already done, the way to renew them is delete and rerun it.
-        #assume feature aggregation is done. Just merge all features except non-feature columns
         import pyspark
         try:
             tr_inst = self.spark.read.parquet(self.training_temp_dir)
@@ -195,7 +186,6 @@ class data_run_experiment():
         self.logger.debug(train_terminal_outcome.select("ID").distinct().count())
 
         intv_w_p_val = self.identify_relevant_action(train_action_df, train_terminal_outcome, tr_inst.select("ID").distinct().count())
-        # TODO Check whether discharge DX is seep into this. Found one case.
         intv_w_p_val.join(self.def_df.where(col("SOURCE").isin(["CPT","MED","PROC"])), self.itemid).orderBy("p_val").show(100, truncate=False)
 
         from pyspark.sql.functions import sum,rand,max,lit
@@ -241,7 +231,6 @@ class data_run_experiment():
                 .withColumn("{0}_excl".format(cur_of), col("ID").isin(excl_id).cast("double")).repartition("ID","TIME_OBS")\
                 .join(broadcast(pos_inst_dict[cur_of]),["ID","TIME_OBS"],"left_outer").fillna(value=0.0,subset=["{0}_label".format(cur_of)]).persist()
             print(tr_inst.count())
-            #inst level
             tr_inst.groupBy("{0}_label".format(cur_of),"{0}_excl".format(cur_of)).agg(count("*")).show()
             te_inst = te_inst.withColumn("TIME_OBS",col("TIME_SPAN.TIME_TO").cast("date"))\
                 .withColumn("{0}_excl".format(cur_of), col("ID").isin(excl_id).cast("double")).repartition("ID","TIME_OBS")\
@@ -249,7 +238,6 @@ class data_run_experiment():
             print(te_inst.count())
             te_inst.groupBy("{0}_label".format(cur_of),"{0}_excl".format(cur_of)).agg(count("*")).show()
 
-            #pts_level
             tr_inst.groupBy("ID").agg(max("{0}_label".format(cur_of)).alias("{0}_label".format(cur_of)),max("{0}_excl".format(cur_of)).alias("{0}_excl".format(cur_of))).groupBy("{0}_label".format(cur_of),"{0}_excl".format(cur_of)).agg(count("*")).show()
             te_inst.groupBy("ID").agg(max("{0}_label".format(cur_of)).alias("{0}_label".format(cur_of)),max("{0}_excl".format(cur_of)).alias("{0}_excl".format(cur_of))).groupBy("{0}_label".format(cur_of),"{0}_excl".format(cur_of)).agg(count("*")).show()
 
@@ -337,7 +325,6 @@ class data_run_experiment():
             orig_tr_inst = tr_inst
             orig_te_inst = te_inst
             self.logger.info("ORIGINAL_INSTANCES")
-            # of pop_overview
             from pyspark.sql.functions import count, datediff
             from pyspark.sql.functions import udf, log, sum, exp, max
             udf_prob = udf(lambda x: x.toArray().tolist()[1])
@@ -388,7 +375,6 @@ class data_run_experiment():
                     self.logger.info("TR_POP")
                     tr_inst.groupBy("label").agg(count("*")).show()
 
-                    # NEED to change with other name, for example pipeline model.
                     pipeline_models = pipeline.fit(tr_inst, params=paramGrid)
 
                     for cur_model in pipeline_models:
@@ -482,7 +468,6 @@ class data_run_experiment():
                 self.logger.info("tr_inst_count:{0}//val_inst_count{1}".format(tr_inst.count(),val_inst.count()))
                 te_inst.printSchema()
 
-                # NEED to change with other name, for example pipeline model.
                 pipeline_models = pipeline.fit(tr_inst,params=paramGrid)
 
                 max_pr = -1.0
@@ -512,7 +497,6 @@ class data_run_experiment():
                 #tr_inst.show_corr_result(tr_result)
                 from pyspark.mllib.evaluation import BinaryClassificationMetrics
                 self.logger.info("MAX_PRC_VAL:{0}".format(max_pr))
-                # Just Save the Crossvalidation model so that I can access the avgMetric later.
                 bestModel.save(self.model_dir_template.format(cur_of,max_pr))
                 tr_inst.unpersist()
                 val_inst.unpersist()
@@ -601,7 +585,6 @@ class data_run_experiment():
 
         from pyspark.sql.functions import max,col,lit
         terminal_action = self.action_df.select("ID", "ITEMID").distinct()
-        #cms_dx_def = self.cur_annotator.annotate_of_label()
         terminal_outcome = self.cur_terminal_df
         from pyspark.sql.functions import when
         cur_of_col = [self.target_disch_col]
@@ -640,7 +623,6 @@ class data_run_experiment():
         cur_def = self.def_df
 
         original_def = cur_def
-        #INPUTEVENT/PROCEDUREEVENTS INCLUSION CRITERIA
         all_itemid =self.get_action_itemids()
 
         self.action_df = self.action_df.join(all_itemid,["ITEMID","SOURCE"]).persist()

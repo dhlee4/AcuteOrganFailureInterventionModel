@@ -8,7 +8,6 @@ from spark_and_logger import spark_and_logger
 
 
 class preprocessor_gen():
-    # TODO get rid of sc from the codes. Use self.spark instead
     def __init__(self):
         cur_spark_and_logger = spark_and_logger()
         spark_inited = False
@@ -78,27 +77,22 @@ class preprocessor_gen():
             Q2_data_frame = percent_data_frame.withColumn("Q2_rn",row_number().over(Q2_percentile)).where("Q2_rn == 1")\
                             .select(labelCol,inputCol,lit("Q2").alias("quantile"))
             Q3_data_frame = percent_data_frame.withColumn("Q3_rn",row_number().over(Q3_percentile)).where("Q3_rn == 1")\
-                            .select(labelCol,inputCol,lit("Q3").alias("quantile")) # why divide?
+                            .select(labelCol,inputCol,lit("Q3").alias("quantile"))
             self.logger.debug("[NUM_IQR_FILTER] REPARTITION_CONST Not Asserted")
             merge_all = Q1_data_frame.unionAll(Q2_data_frame).unionAll(Q3_data_frame).persist()
 
             self.logger.debug("[NUM_IQR_FILTER] Qs Merged")
 
-            #debug_purpose
             udf_parse_list_to_map = udf(lambda maps: dict(list(tuple(x) for x in maps)),MapType(StringType(),StringType()))
 
             self.logger.debug("[NUM_IQR_FILTER] Before merge quantiles")
             aggregate_quantiles = merge_all.groupBy(labelCol).agg(collect_list(struct("quantile",inputCol)).alias("quant_info"))
-            #aggregate_quantiles.show()
             self.logger.debug("AGG ONLY")
             aggregate_quantiles = aggregate_quantiles.select(labelCol,udf_parse_list_to_map("quant_info").alias("quant_info"))
-            #aggregate_quantiles.show()
             self.logger.debug("TRANSFORM")
             iqr_data_frame = aggregate_quantiles.withColumn("Q1",col("quant_info").getItem("Q1").cast("float"))\
                 .withColumn("Q2",col("quant_info").getItem("Q2").cast("float"))\
                 .withColumn("Q3",col("quant_info").getItem("Q3").cast("float"))
-            #debug_purpose
-            #aggregate_quantiles.show()
             self.logger.debug("QUANTILE_EXTRACTION")
         else:
             cur_label_list = data_frame.select(labelCol).distinct().rdd.flatMap(list).collect()
@@ -130,8 +124,6 @@ class preprocessor_gen():
 
         self.logger.debug("[NUM_IQR_FILTER] iqr_data_frame merged")
         if REPARTITION_CONST is None:
-    #        data_frame.show()
-    #        iqr_data_frame.show()
             self.logger.debug("[NUM_IQR_FILTER] RETURN_PREP, REPARTITION_CONST NOT ASSERTED")
             ret_data_frame = data_frame.repartition(labelCol).join(iqr_data_frame,labelCol).where((col("LB").cast("float") <= col(inputCol).cast("float")) & (col("UB").cast("float")>=col(inputCol).cast("float")))\
                                                                  .drop("LB").drop("UB").persist()
@@ -172,7 +164,7 @@ class preprocessor_gen():
         self.logger.debug("[CAT_FREQUENCY_FILTER] ret_df prepared")
         if REPARTITION_CONST is not None:
             ret_data_frame = ret_data_frame.repartition(REPARTITION_CONST)
-        ret_voca = ret_data_frame.select("ITEMID","VALUE").distinct()#.withColumn("idx",monotonically_increasing_id())
+        ret_voca = ret_data_frame.select("ITEMID","VALUE").distinct()
         ret_voca = ret_voca.rdd.map(lambda x: (x.ITEMID,x.VALUE)).zipWithUniqueId().map(lambda x: {"idx":x[1], "ITEMID":x[0][0], "VALUE":x[0][1]}).toDF()
         if REPARTITION_CONST is not None:
             ret_voca = ret_voca.repartition(REPARTITION_CONST)
@@ -239,7 +231,6 @@ class preprocessor_gen():
         return ret_data_frame
 
     def cat_featurizer(self,data_frame, voca_df, inputCol="VALUE",labelCol="ITEMID",outputCol="cat_features",REPARTITION_CONST = None):
-        # TODO add test routine for value_aggregator
         def prep_cat_dict(avail, pos):  # internal
             ret_dict_key = list(map(lambda x: "C_" + str(x), avail))
             ret_dict = dict(zip(ret_dict_key, [0.0] * len(ret_dict_key)))
@@ -292,7 +283,6 @@ class preprocessor_gen():
             return
         ret_data_frame = data_frame.where(col(labelCol).isin(target_label_set))
 
-        #fordebug
         self.logger.debug(target_label_set)
         self.logger.debug(len(target_label_set))
         return ret_data_frame
@@ -324,39 +314,6 @@ class preprocessor_gen():
             ret_feature_col.append(cur_col)
             ret_schema = ret_schema.add(StructField(cur_col,DoubleType(),True))
         return (ret_df, ret_schema,ret_feature_col)
-
-    #DL0411: imputer will be depreciated from here. It will be the part of data merger
-    '''def imputer(data_frame, impute_method="mean",inputCols="features", outputCol="features_imputed"):
-    
-        from pyspark.ml.feature import Imputer,VectorAssembler
-        
-        if type(inputCols) != list:
-            inputCols = [inputCols]
-        imputedCols = list()
-        numericalCols = list()
-        categoricalCols = list()
-        for i in inputCols:
-            if i.find("N_") != -1:
-                numericalCols.append(i)
-            elif i.find("C_") != -1:
-                categoricalCols.append(i)
-    
-        print(categoricalCols)
-        print(numericalCols)
-        data_frame = data_frame.fillna(0,subset = categoricalCols)
-        
-        imputedCols = ["imp_{0}".format(x) for x in numericalCols]
-    
-        print("IMPUTER!!")
-        imputer = Imputer(inputCols = numericalCols, outputCols=imputedCols).setStrategy(impute_method)
-        imputer_model = imputer.fit(data_frame)
-        ret_data_frame = imputer_model.transform(data_frame)
-        ret_data_frame.show()
-    
-        ret_data_frame=VectorAssembler(inputCols=imputedCols+categoricalCols, outputCol=outputCol).transform(ret_data_frame)
-        #raised error somewhere near here.
-        return (ret_data_frame,imputedCols+categoricalCols)
-    '''
 
     def value_aggregator(self,data_frame, aggregateCols = ["ID","TIME_SPAN","ITEMID"], catmarkerCol="IS_CAT", inputCol = "VALUE", outputCol="VALUE_LIST"):
         from pyspark.sql.functions import collect_set, collect_list

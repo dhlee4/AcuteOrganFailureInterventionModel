@@ -10,15 +10,6 @@ import os
 from annotator_gen import *
 from pyspark.sql import SparkSession
 import abc
-# TODO expose annotation criteria so that it can be changed! also run on 'Improving documentation and coding for acute
-# organ dysfunction biases estimates of .... by Chanu Rhee et al., from Critical Care/ Maybe in annotator_gen.py
-# TODO define quick turn hyperparameter space.
-# TODO incorporate misc_anal/AHF_focused_anal.py, merge_all_pts.py into validation routine
-# TODO validation routine for verifying the number of instances and number of patients matches across the models
-# TODO validation routine for verifying training IDs and testing IDs are consistent across models
-
-# TODO add output signature and temp signature for generated data in the higher level so that overwrite or collision can
-# TODO be avoided afterwards
 
 from pyspark.sql import SparkSession
 from pyspark.sql.functions import col, when, lit, concat, log,max
@@ -32,10 +23,6 @@ from mimic_preprocess import mimic_preprocessor
 from data_run_experiment import data_run_experiment
 
 class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
-    '''
-    Evaluator will be separated!
-    '''
-
     def __init__(self,target_env=None,is_debug=True,cur_signature="",eval_metric="AUPRC",hyperparam_selection="CV"
                  ,target_disease=None):
         # class(processed previous stuffs?)
@@ -43,9 +30,6 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
             raise Exception("Target disease not specified")
         mimic_preprocessor.__init__(self,target_env, is_debug,cur_signature)
         self.logger.info("preprocessor_init done")
-        ## ideal call = mimic_run_experiment(is_debug=False, cur_signature="MIMIC3_DEMO"
-        #                                   , hyperparam_selection="CV", target_ICD9=["394.1","493.3"], availability_th=0.5
-        #                                   , spark_env=spark.conf_env, eval_metric="AUPRC, AUROC")
         if (type(target_disease) == str) or (type(target_disease) == int):
             self.target_disch_icd9=[target_disease]
         else:
@@ -68,11 +52,6 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
         else:
             self.cur_cv_fold = 5
 
-        '''self.testing_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TEST_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
-        self.training_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TR_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
-        self.model_dir_template = self.home_dir + "/{4}_{0}_GB_{5}_0.7_{1}_{2}_{3}".format("{0}", self.postfix, self.add_flag, "{1}",self.cur_signature,self.hyperparam_selection)
-        self.annot_intv_dir = self.intermediate_dir+"/intervention_{0}_{1}"'''
-
 
     def get_param_grid(self,cur_model_selection):
         from pyspark.ml.tuning import ParamGridBuilder
@@ -91,16 +70,16 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
                 .build()
 
 
-    def add_demo(self):#(tr,te# ):
+    def add_demo(self):
         import pyspark
         try:
             return self.spark.read.parquet(self.cur_demo_file_name).withColumnRenamed("HADM_ID", "ID")
         except pyspark.sql.utils.AnalysisException as ex:
 
-            '''template = "An exception of type {0} occurred. Arguments:\n{1!r}"
+            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(ex).__name__, ex.args)
             self.logger.info(message)
-            self.logger.info("PROCESS")'''
+            self.logger.info("PROCESS")
 
             from pyspark.sql.functions import datediff,col
             from pyspark.ml.feature import OneHotEncoder, StringIndexer
@@ -136,26 +115,6 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
 
 
 if __name__ == "__main__":
-    '''
-    IDEAL CALL
-    
-    --
-    cur_experiment = run_experiment(MIMIC3, TEST_ENV)
-    print cur_experiment
-      - Running ID
-    print cur_experiment.chk_intermediary_dir()
-    print cur_experiment.chk_final_dir()
-    print cur_experiment.run_mimic_experiment()
-    cur_model = cur_experiment.get_best_model()
-    print cur_experiment.show_feature_contrib()
-    print cur_experiment.show_agreement_lab_test()
-    print cur_experiment.show_tr_eval(level="pts",rawMetrics="AUPRC")
-    print cur_experiment.show_te_eval(level="pts",raw_metrics="AUROC")
-    
-    ## Further evaluation should be conducted in separate codes.
-    
-    --
-    '''
     from mimic_hp_training_scale import mimic_run_experiment
 
     import argparse
@@ -179,8 +138,3 @@ if __name__ == "__main__":
 
 
 
-    '''
-    #TODOS
-    2. Remove weird comments
-    4. remove target_env? 
-    '''

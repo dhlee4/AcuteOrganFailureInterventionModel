@@ -1,5 +1,3 @@
-
-# will get this as parameter
 mimic_csv_dir = "./mimic-iii-clinical-database-demo-1.4"
 mimic_parquet_dir = "./mimic3_demo_dataset"
 
