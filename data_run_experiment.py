@@ -9,7 +9,7 @@ import abc
 
 class data_run_experiment():
     __metaclass__ = abc.ABCMeta
-    def __init__(self,eval_metric,hyperparam_selection):
+    def __init__(self,eval_metric,hyperparam_selection,target_disch):
         # TODO Figure out the way to push *.show() in logging.info
         from spark_and_logger import spark_and_logger
         cur_spark_and_logger = spark_and_logger()
@@ -19,12 +19,14 @@ class data_run_experiment():
         self.sel_top=5 #as default
         self.postfix = "p_val_top_{0}".format(self.sel_top)
         self.add_flag="INTV_TOP_AUPRC_{0}".format(self.sel_top)
-        self.target_of = ["TARGET_DISCH"]
+        self.target_disch_col = "DISCH_{0}".format("_".join(target_disch))
         self.non_feature_column = ["ID", "TIME_SPAN"]
         self.eval_performance_criteria=eval_metric
         self.eval_cv_or_tvt = hyperparam_selection
         from annotator_gen import annotator_gen
         self.cur_annotator = annotator_gen()
+        self.json_feature_dump_loc = self.intermediate_dir+"/non_demo_feature_list.json"
+        self.json_demo_feature_dump_loc= self.intermediate_dir + "/demo_feature_list.json"
         return
 
     def handle_missing(self,non_feature_col = ["ID","TIME_SPAN"]):
@@ -73,8 +75,8 @@ class data_run_experiment():
     def set_top_intv_k(self,cur_top_k = 5):
         print(self.home_dir)
         self.sel_top = cur_top_k
-        self.postfix = "p_val_top_{0}".format(self.sel_top)
-        self.add_flag = "INTV_TOP_AUPRC_{0}".format(self.sel_top)
+        self.postfix = "p_val_top_{0}".format(cur_top_k)
+        self.add_flag = "INTV_TOP_AUPRC_{0}".format(cur_top_k)
 
         self.testing_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TEST_RESULT_{1}_{2}".format("{0}",
                                                                                                       self.postfix,
@@ -90,8 +92,8 @@ class data_run_experiment():
                                                                                            self.hyperparam_selection)
         self.annot_intv_dir = self.intermediate_dir + "/intervention_{0}_{1}"
 
-        self.training_temp_dir = self.intermediate_dir + "/TRAINING_{0}_{1}".format(self.postfix, self.add_flag)
-        self.testing_temp_dir = self.intermediate_dir + "/TESTING_{0}_{1}".format(self.postfix, self.add_flag)
+        self.training_temp_dir = self.intermediate_dir + "/TRAINING_{0}_{1}_{2}".format(self.postfix, self.add_flag,self.target_disch_col)
+        self.testing_temp_dir = self.intermediate_dir + "/TESTING_{0}_{1}_{2}".format(self.postfix, self.add_flag,self.target_disch_col)
 
         return
 
@@ -148,6 +150,10 @@ class data_run_experiment():
             self.logger.debug("feature_columns")
         cur_cols = sorted(cur_cols)
         self.logger.debug(cur_cols)
+        import json
+
+        json.dump({"non_demo_features":cur_cols},open(self.json_feature_dump_loc,"w"))
+
 
         obs_df = VectorAssembler(inputCols=cur_cols, outputCol="features_imputed").transform(obs_df)
 
@@ -204,7 +210,7 @@ class data_run_experiment():
         annot_df.show()
         pos_inst_dict = dict()
         from pyspark.sql.functions import count
-        for cur_of in self.target_of:
+        for cur_of in [self.target_disch_col]:
             # For debug purpose, pass if target_of is not identified
             self.logger.debug(cur_of)
             intv_w_p_val.where("DISCH_DX == '{0}'".format(cur_of)).orderBy(col("p_val").cast("double")).show(50,truncate=False)
@@ -221,11 +227,9 @@ class data_run_experiment():
             self.def_df.where(col(self.itemid).isin(target_annot_criteria)).show(cur_annot_topk,truncate=False)
             pos_inst_dict[cur_of] = annot_df.where((col(self.itemid).isin(target_annot_criteria)) & (col("DISCH_DX") == cur_of))\
                 .select("ID", col("TIME_OBS").cast("date").alias("TIME_OBS"), lit("1").cast("double").alias("{0}_label".format(cur_of)))\
-                .distinct()
-            if pos_inst_dict[cur_of].count() != 0:
-                pos_inst_dict[cur_of].persist()
-            pos_inst_dict[cur_of].show()
+                .distinct().persist()
             pos_inst_dict[cur_of].groupBy("{0}_label".format(cur_of)).agg(count("*")).show()
+            from pyspark.sql.functions import broadcast
 
             true_inst = annot_df.where((col(self.itemid).isin(target_annot_criteria)) & (col("DISCH_DX") == cur_of))
             excl_id = annot_df.withColumn("IS_TARGET_OF",when(col("DISCH_DX") ==cur_of,lit("1").cast("double")).otherwise(lit("0").cast("double")))\
@@ -234,10 +238,16 @@ class data_run_experiment():
                 .where("(SUM_IS_TARGET_OF <> 0) AND (SUM_IS_REL_INTV == 0)").select("ID").distinct().rdd.flatMap(list).collect()
             self.logger.debug( "NUM_PTS_EXCLUDED:{0}".format(len(excl_id)))
             self.logger.debug( "TRAINING_INST_COUNT:{0}".format(tr_inst.count()))
-            tr_inst = tr_inst.withColumn("TIME_OBS",col("TIME_SPAN.TIME_TO").cast("date")).withColumn("{0}_excl".format(cur_of), col("ID").isin(excl_id).cast("double")).join(pos_inst_dict[cur_of],["ID","TIME_OBS"],"left_outer").fillna(value=0.0,subset=["{0}_label".format(cur_of)]).persist()
+            tr_inst = tr_inst.withColumn("TIME_OBS",col("TIME_SPAN.TIME_TO").cast("date"))\
+                .withColumn("{0}_excl".format(cur_of), col("ID").isin(excl_id).cast("double")).repartition("ID","TIME_OBS")\
+                .join(broadcast(pos_inst_dict[cur_of]),["ID","TIME_OBS"],"left_outer").fillna(value=0.0,subset=["{0}_label".format(cur_of)]).persist()
+            print(tr_inst.count())
             #inst level
             tr_inst.groupBy("{0}_label".format(cur_of),"{0}_excl".format(cur_of)).agg(count("*")).show()
-            te_inst = te_inst.withColumn("TIME_OBS",col("TIME_SPAN.TIME_TO").cast("date")).withColumn("{0}_excl".format(cur_of), col("ID").isin(excl_id).cast("double")).join(pos_inst_dict[cur_of],["ID","TIME_OBS"],"left_outer").fillna(value=0.0, subset=["{0}_label".format(cur_of)]).persist()
+            te_inst = te_inst.withColumn("TIME_OBS",col("TIME_SPAN.TIME_TO").cast("date"))\
+                .withColumn("{0}_excl".format(cur_of), col("ID").isin(excl_id).cast("double")).repartition("ID","TIME_OBS")\
+                .join(broadcast(pos_inst_dict[cur_of]),["ID","TIME_OBS"],"left_outer").fillna(value=0.0, subset=["{0}_label".format(cur_of)]).persist()
+            print(te_inst.count())
             te_inst.groupBy("{0}_label".format(cur_of),"{0}_excl".format(cur_of)).agg(count("*")).show()
 
             #pts_level
@@ -290,66 +300,6 @@ class data_run_experiment():
         cur_test = merged_terminal_action.withColumn("p_val",udf_binom_test("DISCH_DX_ACTION_CNT","DISCH_DX_CNT","action_prop")).cache()
         return cur_test
 
-    def evaluate_agg_prob(self):
-        import pyspark
-        from pyspark.sql.functions import col
-        #terminal_outcome.show()
-        if type(self) == data_run_experiment:
-            raise NotImplementedError("Method need to be called in sub-class but currently called in base class")
-
-
-        from pyspark.sql.functions import udf,log,sum,exp
-        from pyspark.ml.evaluation import BinaryClassificationEvaluator
-
-        udf_prob = udf(lambda x: x.toArray().tolist()[1])
-        of_list = {"AHF":["42821","42823","42831","42833","42841","42843"],"ALI":["51881","51884","51851","51853"],"AKI":["5845","5849","5848"],"ALF":["570"]}
-        cur_terminal_df = self.get_terminal_df()
-        for cur_of in self.target_of:
-            self.logger.info( cur_of)
-            try:
-                cur_training_df = self.spark.read.parquet(self.training_result_dest_template.format(cur_of)).select("ID","TIME_SPAN",udf_prob("Probability").cast("double").alias("probability"),col("{0}_label".format(cur_of)).alias("label"))
-                cur_testing_df = self.spark.read.parquet(self.testing_result_dest_template.format(cur_of)).select("ID","TIME_SPAN",udf_prob("Probability").cast("double").alias("probability"),col("{0}_label".format(cur_of)).alias("label"))
-            except pyspark.sql.utils.AnalysisException as ex:
-                template = "An exception of type {0} occurred. Arguments:\n{1!r}"
-                message = template.format(type(ex).__name__, ex.args)
-                self.logger.info(message)
-                self.logger.info("PROCESS")
-                self.logger.debug( "{0} Not exists".format(cur_of))
-                continue
-            cur_tr_agg = cur_training_df.groupBy("ID").agg(sum(log(1.0-col("probability"))).alias("agg_prob")).select("ID",(1.0-exp("agg_prob")).alias("agg_prob").cast("double"))
-            cur_te_agg = cur_testing_df.groupBy("ID").agg(sum(log(1.0-col("probability"))).alias("agg_prob")).select("ID",(1.0-exp("agg_prob")).alias("agg_prob").cast("double"))
-
-            # TODO terminal_df is flattened terminal DX for now. Need to merge with other DF with ALI,AKI,ALF,AHF column separately.
-
-            cur_tr_agg = cur_tr_agg.join(self.target_terminal_outcome_table,"ID")
-            cur_te_agg = cur_te_agg.join(self.target_terminal_outcome_table,"ID")
-
-            cur_tr_agg.show()
-            cur_te_agg.show()
-
-            self.logger.info("POS VS. NEG")
-            from pyspark.sql.functions import count
-            cur_te_agg.select(cur_of).groupBy(cur_of).agg(count("*")).show()
-
-            self.logger.info( "TR_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(cur_tr_agg)))
-            self.logger.info( "TE_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(cur_te_agg)))
-            self.logger.info( "TR_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(cur_tr_agg)))
-            self.logger.info( "TE_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(cur_te_agg)))
-            te_neg_inst=cur_te_agg.where("{0} == 0.0".format(cur_of))
-            te_pos_inst=cur_te_agg.where("{0} == 1.0".format(cur_of))
-            for target_specific_of in of_list[cur_of]:
-                self.logger.info("TARGET_DX_CODE:{0}".format(target_specific_of))
-                target_specific_df = te_neg_inst.unionAll(te_pos_inst.join(cur_terminal_df.where(col("ICD9_CODE") == target_specific_of).select("ID"),"ID"))
-                self.logger.info( "TARGET_DX_TE_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of).evaluate(target_specific_df)))
-                self.logger.info( "TARGET_DX_TE_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="agg_prob",labelCol=cur_of,metricName="areaUnderPR").evaluate(target_specific_df)))
-            
-
-
-            
-
-            #terminal_outcome
-    #annotate_dataset()
-
     def run_RF(self,tr_inst,te_inst,model_of = []):
         from pyspark.sql.functions import col
         if type(self) == data_run_experiment:
@@ -357,7 +307,7 @@ class data_run_experiment():
 
 
         if model_of == []:
-            model_of = self.target_of
+            model_of = self.target_disch_col
         if type(model_of) == str:
             model_of = [model_of]
 
@@ -572,35 +522,6 @@ class data_run_experiment():
     def get_param_grid(self,cur_model_selection):
         pass
 
-    def raw_predicted_risks(self,target_file,cur_lab,cur_lab_def):
-        import pyspark
-        if type(self) == data_run_experiment:
-            raise NotImplementedError("Method need to be called in sub-class but currently called in base class")
-
-        # TODO Labs probably can be masked in mimic_data_Abstracter.
-        from pyspark.sql.functions import col, datediff, corr, isnan, count, udf
-        from pyspark.ml.evaluation import BinaryClassificationEvaluator
-        # TODO need to abstract this
-        udf_prob = udf(lambda x: float(x.toArray().tolist()[1]))
-
-        self.logger.info( "TARGET_FILE:{0}".format(target_file))
-        try:
-            te_result = self.spark.read.parquet(target_file)\
-                .withColumn("Prob",udf_prob("Probability").cast("double"))
-        except pyspark.sql.utils.AnalysisException as ex:
-            template = "An exception of type {0} occurred. Arguments:\n{1!r}"
-            message = template.format(type(ex).__name__, ex.args)
-            self.logger.info(message)
-            self.logger.debug( "FILE NOT EXISTS! {0}".format(target_file))
-            return
-        self.logger.info("CURRENT_FILE:{0}".format(target_file))
-        corr_result = te_result.join(cur_lab,(cur_lab.ID == te_result.ID) & (datediff(te_result.TIME_SPAN.TIME_TO,cur_lab.TIME_OBS) == 0)).groupBy("ITEMID").agg(corr(col("Prob").cast("double"),col("VALUE").cast("double")).alias("corr_val"),count("*")).persist()
-        corr_result.join(cur_lab_def,"ITEMID").where((~col("corr_val").isNull()) & (~isnan("corr_val"))).orderBy(col("corr_val")).show(100,truncate=False)
-        corr_result.join(cur_lab_def,"ITEMID").where((~col("corr_val").isNull()) & (~isnan("corr_val"))).orderBy(col("corr_val").desc()).show(100,truncate=False)
-        
-        self.logger.info( "TE_AUC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="Prob",labelCol="label").evaluate(te_result)))
-        self.logger.info( "TE_PRC:{0}".format(BinaryClassificationEvaluator(rawPredictionCol="Prob",labelCol="label",metricName="areaUnderPR").evaluate(te_result)))
-
     def run_experiment(self,num_intv = 5):
         '''
         print agg_prob, corr_predicted_risks and return following
@@ -617,7 +538,7 @@ class data_run_experiment():
         tr_result = dict()
         te_result = dict()
         ret_model = dict()
-        for cur_of in self.target_of:
+        for cur_of in [self.target_disch_col]:
             try:
                 cur_model = glob(self.model_dir_template.format(cur_of,"*"))
                 self.logger.info(cur_model)
@@ -666,28 +587,9 @@ class data_run_experiment():
 
             self.logger.info("CUR_OF:{0}".format(cur_of))
 
-        self.evaluate_demographics()
-        self.corr_predicted_risks()
-        self.evaluate_agg_prob()
-
         return tr_result, te_result, cur_model
 
-    def evaluate_demographics(self,target_file = []):
-        cur_demo = self.add_demo()
-        from pyspark.sql.functions import udf
-        udf_age = udf(lambda x: x.toArray().tolist()[0])
-        cur_demo = cur_demo.withColumn("AGE",udf_age("demo_feature"))
-        cur_target_file = self.spark.read.parquet(self.out_file_name)
 
-        anal_df = cur_target_file.select("ID").distinct().join(cur_demo,"ID")
-        from pyspark.sql.functions import avg,stddev_samp,count
-        anal_df.groupBy().agg(avg("AGE"),stddev_samp("AGE")).show()
-
-        self.logger.info(cur_target_file.count())
-        
-        cur_death = self.get_hospital_death()
-        self.logger.info(anal_df.count())
-        anal_df.join(cur_death,"ID").groupBy("IS_DEAD").agg(count("*")).show()
         
         
         
@@ -700,21 +602,22 @@ class data_run_experiment():
 
         from pyspark.sql.functions import max,col,lit
         terminal_action = self.action_df.select("ID", "ITEMID").distinct()
-        cms_dx_def = self.cur_annotator.annotate_of_label()
+        #cms_dx_def = self.cur_annotator.annotate_of_label()
         terminal_outcome = self.cur_terminal_df
-
-        cur_of_col = self.target_of
-        terminal_outcome = terminal_outcome.join(cms_dx_def,"ICD9_CODE").select(["ID"] + cur_of_col).groupBy("ID").agg(
+        from pyspark.sql.functions import when
+        cur_of_col = [self.target_disch_col]
+        terminal_outcome = terminal_outcome.withColumn(self.target_disch_col,when(col("ICD9_CODE").isin(self.target_disch_icd9),lit("1")).otherwise(lit("0")))\
+            .select(["ID"] + cur_of_col).groupBy("ID").agg(
             *(max(c).alias(c) for c in cur_of_col)).select(
             *(col(c).cast("double").alias(c) if c in cur_of_col else col(c) for c in ["ID"] + cur_of_col))
         raw_terminal_outcome = terminal_outcome
         self.logger.debug( "BEFORE_MERGE")
         from pyspark.sql.functions import rand
-        cms_dx_def = self.cur_annotator.annotate_of_label()
+        #cms_dx_def = self.cur_annotator.annotate_of_label()
 
         self.target_terminal_outcome_table = terminal_outcome
         flatten_of_list = list()
-        for cur_of in self.target_of:
+        for cur_of in [self.target_disch_col]:
             flatten_of_list.append(terminal_outcome.where("{0} == 1".format(cur_of)).select("ID",lit("{0}".format(cur_of)).alias("DISCH_DX")))
 
 
@@ -724,21 +627,7 @@ class data_run_experiment():
         self.terminal_outcome = f_reduce(DataFrame.union, flatten_of_list).persist()
         return self.terminal_outcome
 
-    def corr_predicted_risks(self, target_file=[]):
-        from pyspark.sql.functions import col
-        cur_lab = self.obs_df
-        cur_lab.where("SOURCE <> 'VITAL'").show()
-        cur_lab_def = self.def_df.where("SOURCE == 'LAB'")
-        cur_lab_id = self.def_df.where("SOURCE == 'LAB'").select("ITEMID").rdd.flatMap(list).collect()
-        cur_lab = cur_lab.where(col("ITEMID").isin(cur_lab_id))
 
-
-        if target_file == []:
-            for cur_of in self.target_of:
-                target_file.append(self.testing_result_dest_template.format(cur_of))
-
-        for cur_file in target_file:
-            self.raw_predicted_risks(cur_file, cur_lab, cur_lab_def)
 
     def define_and_normalize_terminal_df(self):
         if type(self) == data_run_experiment:

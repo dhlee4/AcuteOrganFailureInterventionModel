@@ -1,3 +1,10 @@
+
+try:
+    import findspark
+    findspark.init("/Users/daehyunlee/spark-2.3.2-bin-hadoop2.7/")
+except:
+    pass
+
 import sys
 import os
 from annotator_gen import *
@@ -29,14 +36,23 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
     Evaluator will be separated!
     '''
 
-    def __init__(self,target_env=None,is_debug=True,cur_signature="",eval_metric="AUPRC",hyperparam_selection="CV"):
+    def __init__(self,target_env=None,is_debug=True,cur_signature="",eval_metric="AUPRC",hyperparam_selection="CV"
+                 ,target_disease=None):
         # class(processed previous stuffs?)
+        print(target_disease)
+        if target_disease is None:
+            raise Exception("Target disease not specified")
         mimic_preprocessor.__init__(self,target_env, is_debug,cur_signature)
         self.logger.info("preprocessor_init done")
         ## ideal call = mimic_run_experiment(is_debug=False, cur_signature="MIMIC3_DEMO"
         #                                   , hyperparam_selection="CV", target_ICD9=["394.1","493.3"], availability_th=0.5
         #                                   , spark_env=spark.conf_env, eval_metric="AUPRC, AUROC")
-        data_run_experiment.__init__(self,eval_metric=eval_metric,hyperparam_selection=hyperparam_selection)
+        if (type(target_disease) == str) or (type(target_disease) == int):
+            self.target_disch_icd9=[target_disease]
+        else:
+            self.target_disch_icd9 = target_disease
+        data_run_experiment.__init__(self,eval_metric=eval_metric,hyperparam_selection=hyperparam_selection
+                                     ,target_disch=self.target_disch_icd9)
         self.logger.info("run_experiment done")
         self.hyperparam_selection=hyperparam_selection
         self.cur_preprocessed = self.run_preprocessor()
@@ -53,10 +69,10 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
         else:
             self.cur_cv_fold = 5
 
-        self.testing_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TEST_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
+        '''self.testing_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TEST_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
         self.training_result_dest_template = self.home_dir + "/{3}_0.7_{0}_TR_RESULT_{1}_{2}".format("{0}", self.postfix, self.add_flag,self.cur_signature )
         self.model_dir_template = self.home_dir + "/{4}_{0}_GB_{5}_0.7_{1}_{2}_{3}".format("{0}", self.postfix, self.add_flag, "{1}",self.cur_signature,self.hyperparam_selection)
-        self.annot_intv_dir = self.intermediate_dir+"/intervention_{0}_{1}"
+        self.annot_intv_dir = self.intermediate_dir+"/intervention_{0}_{1}"'''
 
 
     def get_param_grid(self,cur_model_selection):
@@ -81,6 +97,7 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
         try:
             return self.spark.read.parquet(self.cur_demo_file_name).withColumnRenamed("HADM_ID", "ID")
         except pyspark.sql.utils.AnalysisException as ex:
+
             template = "An exception of type {0} occurred. Arguments:\n{1!r}"
             message = template.format(type(ex).__name__, ex.args)
             self.logger.info(message)
@@ -100,12 +117,18 @@ class mimic_run_experiment(mimic_preprocessor,data_run_experiment):
             target_col.sort()
             self.logger.debug(target_col)
             vector_target = ["AGE"]
+            demo_col_list = ["AGE"]
             for cat_col in target_col:
                 SI_model= StringIndexer(inputCol=cat_col, outputCol="SI_{0}".format(cat_col)).fit(merged_demo)
+                demo_col_list = demo_col_list+[demo_var+"_"+demo_info for demo_var, demo_info in (zip([cat_col]*len(SI_model.labels),SI_model.labels))]
+                #debug. erase when done
+                print(demo_col_list)
                 merged_demo = SI_model.transform(merged_demo)
                 merged_demo = OneHotEncoder(inputCol="SI_{0}".format(cat_col),outputCol="OH_{0}".format(cat_col), dropLast=False).transform(merged_demo)
                 vector_target.append("OH_{0}".format(cat_col))
 
+            import json
+            json.dump({"demo_feature":demo_col_list},open(self.json_demo_feature_dump_loc,"w"))
             sorted(vector_target)
             self.logger.debug( vector_target)
             return_df = VectorAssembler(inputCols=vector_target,outputCol="demo_feature").transform(merged_demo)
@@ -148,13 +171,14 @@ if __name__ == "__main__":
     else:
         cur_target_env = None
 
+    #Target Disease: 42731, 5849, 51881,5990
     cur_experiment = mimic_run_experiment(target_env=cur_target_env,is_debug=False, cur_signature="MIMIC3_DEMO"
-                                          ,eval_metric="AUPRC",hyperparam_selection="TVT")
+                                          ,eval_metric="AUPRC",hyperparam_selection="TVT",target_disease=["51881"])
     # ideal call = mimic_run_experiment(is_debug=False, cur_signature="MIMIC3_DEMO"
     #                                   , hyperparam_selection="CV", target_ICD9=["394.1","493.3"], availability_th=0.5
     #                                   , spark_env=spark.conf_env, eval_metric="AUPRC, AUROC")
     cur_experiment.logger.debug("IN")
-    for cur_intv_num in [5,10]:
+    for cur_intv_num in [10]:
         cur_experiment.logger.debug("run_exp:{0}".format(cur_intv_num))
         cur_experiment.run_experiment(num_intv = cur_intv_num)
     cur_experiment.logger.debug("exp_done:{0}".format(cur_intv_num))
@@ -163,14 +187,6 @@ if __name__ == "__main__":
 
     '''
     #TODOS
-    Remove weird comments
-    Allow CV and model selection
-    provide agreement with lab tests
-    Provide feature contribution
-    Provide additional parameters for
-     1. Lab vs. predictions?
-     2. fp pts dxed with disease?
-     3. Feature contribution from the model
-     4. implement using ipynb
-     5. Provide list of interventions selected
+    2. Remove weird comments
+    4. remove target_env? 
     '''

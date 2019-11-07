@@ -1,5 +1,5 @@
 
-
+#Just for Mac Pro
 import logging
 #TODO: Need to make test environment for both python 2 and python 3
 import sys
@@ -43,12 +43,16 @@ class spark_and_logger(object):
                     from pyspark.sql import SparkSession
                     # TODO allow users to specify the configuration
                     from pyspark import SparkConf
-                    self.__shared_state["spark"]= SparkSession.builder.config([("spark.driver.memory","12g"), ("spark.executor.memory", "4g")])\
+                    self.__shared_state["spark"]= SparkSession.builder\
+                        .config([("spark.driver.memory","12g")
+                              , ("spark.executor.memory", "12g")
+                              , ('spark.driver.maxResultsSize','0')
+                              , ('spark.speculation','true')])\
                         .getOrCreate()
-                    if self.home_dir:
-                        self.__shared_state["spark"].sparkContext.setCheckpointDir(self.home_dir + "tmp_chkpoint")
-                    else:
-                        raise Exception("home_dir not setted for checkpoint")
+                    #if self.home_dir:
+                        #self.__shared_state["spark"].sparkContext.setCheckpointDir(self.home_dir + "tmp_chkpoint")
+                    #else:
+                        #raise Exception("home_dir not setted for checkpoint")
                 return self.__shared_state["spark"]
             else:
                 if "spark" not in self.__shared_state:

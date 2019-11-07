@@ -3,3 +3,5 @@
 !*.py
 !CMS32_DESC_LONG_DX.txt
 !.gitignore
+!*.ipynb
+!README.md

@@ -14,7 +14,8 @@ class annotator_gen():
         return [str(ret_x.split(" ")[0]), (" ".join(ret_x.split(" ")[1:]))]
     #    return (" ".join(ret_x.split(" ")[1:])).strip()
 
-    def annotate_of_label(self, target_disch_icd9=['5849']):
+    # TODO depreciate this function
+    '''def annotate_of_label(self, target_disch_icd9=['5849']):
         from pyspark.sql.functions import udf,col,trim,when,lit,lower
         from pyspark.sql.types import ArrayType,StringType
 
@@ -26,9 +27,9 @@ class annotator_gen():
         cms_dx = cms_dx.withColumn("separated_def",udf_sep_dx_code_def("_c0"))
         cms_dx = cms_dx.withColumn("ICD9_CODE", trim(col("separated_def").getItem(0))).withColumn("LONG_TITLE",col("separated_def").getItem(1)).select("ICD9_CODE","LONG_TITLE")
         cms_dx = cms_dx.withColumn("TARGET_DISCH",when(col("ICD9_CODE").isin(target_disch_icd9),lit("1")).otherwise(lit("0")))
-        return cms_dx
+        return cms_dx'''
 
-        '''cms_dx = cms_dx.withColumn("ALF",when(lower(col("LONG_TITLE")).like("%acute%necrosis%liver%") & (~lower(col("LONG_TITLE")).like('%chronic%')),lit("1")).otherwise(lit("0")))
+    '''cms_dx = cms_dx.withColumn("ALF",when(lower(col("LONG_TITLE")).like("%acute%necrosis%liver%") & (~lower(col("LONG_TITLE")).like('%chronic%')),lit("1")).otherwise(lit("0")))
         cms_dx = cms_dx.withColumn("ARF",when(lower(col("LONG_TITLE")).like("%acute%resp%fail%") & (~lower(col("LONG_TITLE")).like('%chronic%')),lit("1")).otherwise(lit("0")))
         cms_dx = cms_dx.withColumn("AKF",when(lower(col("LONG_TITLE")).like("%acute%kidney%fail%") & (~lower(col("LONG_TITLE")).like('%chronic%')) &(~lower(col("LONG_TITLE")).like("%labor and delivery%")),lit("1")).otherwise(lit("0")))
         if include_LVpEF:
@@ -145,7 +146,7 @@ if __name__ == "__main__":
     action_df = cur_input_item.unionAll(cur_proc_item).select("ID","ITEMID").distinct()
     action_df.show()
 
-    cms_dx_def = annotate_of_label(sc=spark)
+    '''cms_dx_def = annotate_of_label(sc=spark)
     cms_dx_def.where("ALF == 1").show()
 
     terminal_outcome = spark.read.parquet(home_dir+"DIAGNOSES_ICD").select(col("HADM_ID").alias("ID"), col("ICD9_CODE")).join(cms_dx_def,"ICD9_CODE")
@@ -176,5 +177,5 @@ if __name__ == "__main__":
 
 
     #cur_pos_inst = get_annotation(action_original_df, terminal_outcome, terminalCol="ALF",actionItems=target_items)
-    #cur_pos_inst.show()
+    #cur_pos_inst.show()'''
 
